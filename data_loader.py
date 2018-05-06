@@ -34,5 +34,5 @@ class CifarDataLoader(object):
 
     def get_test_data(self):
         m_data, labels = get_cifar10_test_data()
-
+        m_data = (m_data / 127.5) - 1
         return m_data, labels
