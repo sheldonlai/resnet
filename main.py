@@ -25,6 +25,7 @@ tf.app.flags.DEFINE_float('learning_rate', 0.1, """the learning rate""")
 tf.app.flags.DEFINE_integer('batch_size', 128, """batch size""")
 tf.app.flags.DEFINE_integer('save', 500, """save every x iteration""")
 tf.app.flags.DEFINE_integer('progressive_step', 5000, """train only the core layers""")
+tf.app.flags.DEFINE_integer('validate', 500, """validate every""")
 
 data_loader = CifarDataLoader(augmentation=FLAGS.data_augmentation)
 
@@ -82,7 +83,8 @@ if FLAGS.train:
     sess.run(tf.global_variables_initializer())
     step = recover()
     start_time = time.time()
-    learning_rate = FLAGS.learning_rate
+    last_valid_time = time.time()
+    learning_rate = sess.run(model.learning_rate)
     print('learning rate is %f' % learning_rate)
 
     valid_accs = []
@@ -106,7 +108,7 @@ if FLAGS.train:
         step = tf.train.global_step(sess, model.global_step)
         train_accs.append(t_acc)
 
-        if step == FLAGS.progressive_step:
+        if step == FLAGS.progressive_step and FLAGS.progressive:
             train_op = model.train_op
             acc_op = model.accuracy
 
@@ -116,20 +118,22 @@ if FLAGS.train:
             sess.run(tf.assign(model.learning_rate, learning_rate / 10))
             learning_rate = sess.run(model.learning_rate)
             print('learning rate is %f' % learning_rate)
-            valid_acc_results = []
 
         if step % FLAGS.save == 0:
-            loss = sess.run(model.loss, feed_dict={model.x: x, model.y: y, model.phase: 0})
+            model.saver.save(sess, save_path + '/ckpt', step)
+            print('step: %d, time elaspsed: %3.5f' % (step, time.time() - start_time))
+            start_time = time.time()
+
+        if step % FLAGS.validate == 0:
             acc = model.get_validation_accuracy_op(sess) * 100
-            valid_acc_results.append(acc)
             t_acc = float(np.mean(train_accs) * 100)
+            loss = sess.run(model.loss, feed_dict={model.x: x, model.y: y, model.phase: 0})
             print('step %d, valid accuracy %f%%, training_acc %f%%, training_loss %f, time elasped %s, '
                   'processed batches in queue: %d' %
-                  (step, acc, t_acc, loss, time.time() - start_time, model.q.size()))
+                  (step, acc, t_acc, loss, time.time() - last_valid_time, model.q.size()))
             train_accs = []
+            last_valid_time = time.time()
 
-            model.saver.save(sess, save_path + '/ckpt', step)
-            start_time = time.time()
 else:
     sess.run(tf.global_variables_initializer())
     recover()

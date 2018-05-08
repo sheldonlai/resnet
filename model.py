@@ -69,7 +69,7 @@ class ResNetClassifier(object):
             assert (conv_layer.get_shape()[-1] == depth)
 
             for k in range(residual_layers[i]):
-                conv_layer = residual_block(conv_layer, depth, block_num=str(depth) + '_' + str(k), zero_init=zero_init)
+                conv_layer = residual_block(conv_layer, depth, block_num=str(depth) + '_' + str(k))
                 assert (conv_layer.get_shape()[-1] == depth)
 
         self.update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -78,6 +78,7 @@ class ResNetClassifier(object):
         self.core_logits = tf.layers.dense(tf.reshape(tf.reduce_mean(core_layer, [1, 2]), [batch_size, -1]), 10)
         # End of layers
 
+        self.prediction = tf.argmax(self.logits, 1)
         trainable_vars = tf.trainable_variables()
         core_var_list = [v for v in trainable_vars if 'core' in v.name]
 
@@ -112,7 +113,7 @@ class ResNetClassifier(object):
 
                 # train core only
                 self.train_core_op = self.optimizer.minimize(loss=self.core_loss, var_list=core_var_list,
-                                                            global_step=self.global_step)
+                                                             global_step=self.global_step)
 
         self.saver = tf.train.Saver(max_to_keep=10)
 
@@ -133,23 +134,20 @@ class ResNetClassifier(object):
     #     return res, np.array(labels)
 
     def get_validation_accuracy_op(self, sess):
-        data = self.valid_data
-        labels = self.valid_labels
+        return self.get_data_accuracy(sess, self.valid_data, self.valid_labels)
 
-        return self.get_data_accuracy(sess, data, labels)
-
-    def get_data_accuracy(self, sess, data, labels, ):
+    def get_data_accuracy(self, sess, data, labels):
         batch_num = int(math.ceil(len(data) / self.batch_size))
         length, y_dim, x_dim, channel = data.shape
         prediction_holder = None
         for index in range(batch_num):
             if (index + 1) * self.batch_size <= len(data):
-                res = data[index * self.batch_size:(index + 1) * self.batch_size]
+                x = data[index * self.batch_size:(index + 1) * self.batch_size]
             else:
                 data_last = data[index * self.batch_size:]
-                res = np.vstack((data_last, np.zeros((self.batch_size - len(data_last), y_dim, x_dim, channel))))
+                x = np.vstack((data_last, np.zeros((self.batch_size - len(data_last), y_dim, x_dim, channel))))
 
-            prediction = sess.run(tf.argmax(self.logits, 1), feed_dict={self.x: res, self.phase: 0})
+            prediction = sess.run(self.prediction, feed_dict={self.x: x, self.phase: 0})
             if prediction_holder is None:
                 prediction_holder = prediction
             else:
