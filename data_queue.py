@@ -35,6 +35,9 @@ class DataQueue(object):
             print('current has %d batches in queue' % self.q.qsize())
         return self.q.get(block=True)
 
+    def size(self):
+        return self.q.qsize()
+
     def _populate_q(self):
         i = np.arange(self.data_shape[0])
         np.random.shuffle(i)

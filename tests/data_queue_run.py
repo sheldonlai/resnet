@@ -3,7 +3,7 @@ import time
 from data_loader import CifarDataLoader
 from data_queue import DataQueue
 
-dl = CifarDataLoader()
+dl = CifarDataLoader(augmentation=True)
 data, labels, _, _ = dl.get_data()
 print('making data q')
 dq = DataQueue(data, labels, 128, capacity=100, threads=16)

@@ -38,9 +38,11 @@ def conv_transpose(input_, output_shape, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02
 
 # modified code from https://github.com/wenxinxu/resnet-in-tensorflow/blob/master/resnet.py
 def residual_block(input_layer, output_channel, first_block=False, block_num=None,
-                   avg_pool_add=True, is_training=True, init_type=None, core=False):
+                   avg_pool_add=True, is_training=True, zero_init=False, core=False):
     """
     Defines a residual block in ResNet
+    :param zero_init: init weights for convolution as zeros
+    :param core: add a core prefix in scope
     :param is_training: if network is currently training
     :param avg_pool_add: boolean to determine if the function do a residual avg pool addition if the dimension is changed
     :param block_num: number of the block (used for naming scope)
@@ -52,7 +54,13 @@ def residual_block(input_layer, output_channel, first_block=False, block_num=Non
 
     block_num = "_" + x_str(block_num)
     n, h, w, input_channel = input_layer.get_shape().as_list()
-    with tf.variable_scope("block" + block_num):
+
+    if core:
+        scope_name = "core_" + "block" + block_num
+    else:
+        scope_name = "block" + block_num
+
+    with tf.variable_scope(scope_name, reuse=tf.AUTO_REUSE):
         # When it's time to "shrink" the image size, we use stride =
         # output channel can be >= input channel since the first block would go from 3 to 64
         if input_channel * 2 <= output_channel:
@@ -69,17 +77,17 @@ def residual_block(input_layer, output_channel, first_block=False, block_num=Non
             if first_block:
                 std_dev = tf.sqrt(2 / tf.reduce_prod(tf.cast(input_layer.get_shape()[1:], dtype=tf.float32)))
                 conv1 = conv2d_cus(input_layer, output_channel, name='conv2d_1', stride=stride, k_size=3,
-                                   stddev=std_dev)
+                                   stddev=std_dev, zero_init=zero_init)
             else:
                 std_dev = tf.sqrt(2 / tf.reduce_prod(tf.cast(np.array([h, w, output_channel]), dtype=tf.float32)))
                 conv1 = tf.nn.relu(batch_norm(conv2d_cus(input_layer, output_channel, name='conv2d_1', stddev=std_dev,
-                                                         k_size=3, stride=stride),
+                                                         k_size=3, stride=stride, zero_init=zero_init),
                                               is_training=is_training, scope="bn1"))
 
         with tf.variable_scope('conv2_in_block' + block_num):
             std_dev = tf.sqrt(2 / tf.reduce_prod(tf.cast(np.array([h, w, output_channel]), dtype=tf.float32)))
             conv2 = tf.nn.relu(batch_norm(conv2d_cus(conv1, output_channel, name='conv2d_2', stddev=std_dev,
-                                                     k_size=3, stride=1),
+                                                     k_size=3, stride=1, zero_init=zero_init),
                                           is_training=is_training, scope="bn2"))
 
         if first_block or (not avg_pool_add and increase_dim):
