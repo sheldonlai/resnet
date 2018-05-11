@@ -5,11 +5,13 @@ import os
 import numpy as np
 
 from data_loader import CifarDataLoader
+from data_queue import DataQueue
 from model import ResNetClassifier, get_accuracy
 
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_list('layers', [16, 32, 64], """layers and their depths""")
 tf.app.flags.DEFINE_list('residual_layers', [5, 5, 5], """number of residual layers in between""")
+tf.app.flags.DEFINE_list('residual_not_core_layers', [1, 1, 1], """# of residual layers that are not core""")
 tf.app.flags.DEFINE_list('steps', [21000, 36000, 50000], "steps to decrease learning rate, the last one is ending step")
 
 tf.app.flags.DEFINE_boolean('train', True, """layers and their depths""")
@@ -24,11 +26,14 @@ tf.app.flags.DEFINE_string('summaries_dir', './log', """recover previous model o
 tf.app.flags.DEFINE_float('learning_rate', 0.1, """the learning rate""")
 tf.app.flags.DEFINE_integer('batch_size', 128, """batch size""")
 tf.app.flags.DEFINE_integer('save', 500, """save every x iteration""")
-tf.app.flags.DEFINE_integer('progressive_step', 5000, """train only the core layers""")
+tf.app.flags.DEFINE_integer('progressive_step', 5000, """train only the core layers util step x""")
 tf.app.flags.DEFINE_integer('validate', 500, """validate every""")
 
-data_loader = CifarDataLoader(augmentation=FLAGS.data_augmentation)
+tf.app.flags.DEFINE_integer('partition', 1, """ divided the training data into portions""")
+tf.app.flags.DEFINE_integer('selection', 0, """ if partition is enabled, select the x batch to train""")
+tf.app.flags.DEFINE_integer('change_data_set_step', 26000, """step to switch the data set""")
 
+data_loader = CifarDataLoader(augmentation=FLAGS.data_augmentation, partition=FLAGS.partition, selection=FLAGS.selection)
 model = ResNetClassifier(data_loader=data_loader, zero_init=FLAGS.progressive,
                          layers=[int(float(e)) for e in FLAGS.layers],
                          data_augmentation=FLAGS.data_augmentation,
@@ -37,6 +42,10 @@ model = ResNetClassifier(data_loader=data_loader, zero_init=FLAGS.progressive,
 sess = tf.Session()
 
 valid_acc_results = []
+
+assert(len(FLAGS.layers) == len(FLAGS.residual_layers))
+if FLAGS.progressive:
+    assert(len(FLAGS.residual_not_core_layers) == len(FLAGS.residual_layers))
 
 
 def recover():
@@ -92,7 +101,7 @@ if FLAGS.train:
 
     if FLAGS.progressive and step < FLAGS.progressive_step:
         train_op = model.train_core_op
-        acc_op = model.core_accuracy
+        acc_op = model.accuracy
     else:
         train_op = model.train_op
         acc_op = model.accuracy
@@ -102,13 +111,21 @@ if FLAGS.train:
         # print('in training loop')
         x, y = model.get_batch()
 
-        summary, _, t_acc = sess.run([merged, train_op, acc_op],
-                                     feed_dict={model.x: x, model.y: y, model.phase: 1})
-        train_writer.add_summary(summary, step)
+        _, t_acc = sess.run([train_op, model.accuracy], feed_dict={model.x: x, model.y: y, model.phase: 1})
+        # train_writer.add_summary(summary, step)
         step = tf.train.global_step(sess, model.global_step)
         train_accs.append(t_acc)
 
+        if step == FLAGS.change_data_set_step and FLAGS.partition > 1:
+            # change dataset
+            new_loader = CifarDataLoader(augmentation=FLAGS.data_augmentation)
+            m_data, labels, _, _ = new_loader.get_data()
+            new_q = DataQueue(m_data, labels, FLAGS.batch_size, capacity=200,
+                              threads=32, data_aug=FLAGS.data_augmentation)
+            model.replace_data_queue(new_q)
+
         if step == FLAGS.progressive_step and FLAGS.progressive:
+            print("Now training core")
             train_op = model.train_op
             acc_op = model.accuracy
 
@@ -121,8 +138,9 @@ if FLAGS.train:
 
         if step % FLAGS.save == 0:
             model.saver.save(sess, save_path + '/ckpt', step)
-            print('step: %d, time elaspsed: %3.5f' % (step, time.time() - start_time))
-            start_time = time.time()
+            if FLAGS.save != FLAGS.validate:
+                print('step: %d, time elaspsed: %3.5f' % (step, time.time() - start_time))
+                start_time = time.time()
 
         if step % FLAGS.validate == 0:
             acc = model.get_validation_accuracy_op(sess) * 100

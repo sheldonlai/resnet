@@ -21,17 +21,14 @@ def variable_summaries(var):
 
 
 class ResNetClassifier(object):
-    def __init__(self, data_loader, layers=(64, 128, 256), residual_layers=(1, 2, 1), data_augmentation=True,
-                 learning_rate=0.01, batch_size=128, zero_init=False):
+    def __init__(self, data_loader, layers=(16, 32, 64), residual_layers=(5, 5, 5), data_augmentation=True,
+                 non_core_layers=(1, 1, 1), learning_rate=0.01, batch_size=128, zero_init=False):
         """
         :param layers: tuple that has the depth dimension vector
         """
 
         assert (len(layers) == len(residual_layers))
         m_data, labels, self.valid_data, self.valid_labels = data_loader.get_data()
-
-        # self.m_data = m_data
-        # self.labels = labels
 
         self.q = DataQueue(m_data, labels, batch_size, capacity=200, threads=32, data_aug=data_augmentation)
         self.q.start()
@@ -55,55 +52,41 @@ class ResNetClassifier(object):
 
         # Layers
         conv_layer = None
-        core_layer = None
         for i, depth in enumerate(layers):
             if conv_layer is None:
                 conv_layer = residual_block(self.x, depth, block_num=str(depth), first_block=True, core=True,
                                             is_training=self.phase)
-                core_layer = conv_layer
             else:
                 conv_layer = residual_block(conv_layer, depth, block_num=str(depth), first_block=False, core=True,
-                                            is_training=self.phase)
-                core_layer = residual_block(core_layer, depth, block_num=str(depth), first_block=False, core=True,
                                             is_training=self.phase)
             assert (conv_layer.get_shape()[-1] == depth)
 
             for k in range(residual_layers[i]):
-                conv_layer = residual_block(conv_layer, depth, block_num=str(depth) + '_' + str(k))
+                if k > residual_layers[i] - non_core_layers[i]:
+                    # non-core layer
+                    conv_layer = residual_block(conv_layer, depth, block_num=str(depth) + '_' + str(k),
+                                                zero_init=zero_init, is_training=self.phase)
+                else:
+                    conv_layer = residual_block(conv_layer, depth, block_num=str(depth) + '_' + str(k), core=True,
+                                                zero_init=False, is_training=self.phase)
                 assert (conv_layer.get_shape()[-1] == depth)
 
         self.update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         pool_layer = tf.reduce_mean(conv_layer, [1, 2])
         self.logits = tf.layers.dense(tf.reshape(pool_layer, [batch_size, -1]), 10)
-        self.core_logits = tf.layers.dense(tf.reshape(tf.reduce_mean(core_layer, [1, 2]), [batch_size, -1]), 10)
-        # End of layers
 
         self.prediction = tf.argmax(self.logits, 1)
         trainable_vars = tf.trainable_variables()
         core_var_list = [v for v in trainable_vars if 'core' in v.name]
 
         loss_l2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_vars if 'bn' not in v.name]) / 2 * 0.0001
-        core_loss_l2 = tf.add_n([tf.nn.l2_loss(v) for v in core_var_list if 'bn' not in v.name]) / 2 * 0.0001
 
-        with tf.name_scope('cross_entropy'):
-            with tf.name_scope('total'):
-                self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-                    logits=self.logits, labels=self.y)) + loss_l2
+        self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=self.logits, labels=self.y)) + loss_l2
 
-                self.core_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-                    logits=self.core_logits, labels=self.y)) + core_loss_l2
+        prediction = tf.equal(tf.argmax(self.logits, 1), tf.cast(self.y, tf.int64))
 
-        tf.summary.scalar('cross_entropy', self.loss)
-
-        with tf.name_scope('accuracy'):
-            with tf.name_scope('correct_prediction'):
-                correct_prediction = tf.equal(tf.argmax(self.logits, 1), tf.cast(self.y, tf.int64))
-                core_correct_prediction = tf.equal(tf.argmax(self.core_logits, 1), tf.cast(self.y, tf.int64))
-            with tf.name_scope('accuracy'):
-                self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-                self.core_accuracy = tf.reduce_mean(tf.cast(core_correct_prediction, tf.float32))
-        tf.summary.scalar('accuracy', self.accuracy)
-        tf.summary.scalar('core_accuracy', self.accuracy)
+        self.accuracy = tf.reduce_mean(tf.cast(prediction, tf.float32))
 
         with tf.control_dependencies(self.update_ops):
             with tf.name_scope('train'):
@@ -112,13 +95,24 @@ class ResNetClassifier(object):
                 self.train_op = self.optimizer.minimize(loss=self.loss, global_step=self.global_step)
 
                 # train core only
-                self.train_core_op = self.optimizer.minimize(loss=self.core_loss, var_list=core_var_list,
+                self.train_core_op = self.optimizer.minimize(loss=self.loss, var_list=core_var_list,
                                                              global_step=self.global_step)
 
         self.saver = tf.train.Saver(max_to_keep=10)
 
     def get_batch(self):
         return self.q.pop()
+
+    def replace_data_queue(self, new_queue):
+        """
+        Replaces the old data queue
+        :param new_queue: a new data queue
+        :return: None
+        """
+        self.q.stop()
+        self.q = None
+        self.q = new_queue
+        self.q.start()
 
     # def get_training_batch(self, index):
     #     data = self.m_data

@@ -6,7 +6,7 @@ from util.utils import get_cifar10_all_data, \
 
 class CifarDataLoader(object):
 
-    def __init__(self, augmentation=False, normalize=False):
+    def __init__(self, augmentation=False, normalize=False, partition=1, selection=0):
         """
         :param data_batch: data_batch is in range [0,9]
         :param scale: float in range [0 ,1.0] to scale image down
@@ -17,7 +17,11 @@ class CifarDataLoader(object):
         self.mean = None
         self.stddev = None
 
-    def get_data(self):
+        self.partition = partition <= 1
+        self.partition_num = partition
+        self.selection = selection
+
+    def get_data(self, selection=None):
         if not self.augmentation:
             m_data, labels = get_cifar10_all_data()
             m_data = (m_data / 127.5) - 1
@@ -30,8 +34,6 @@ class CifarDataLoader(object):
 
             m_data = np.array([e for i, e in enumerate(m_data) if i not in mask])
             labels = np.array([e for i, e in enumerate(labels) if i not in mask])
-
-            return m_data, labels, valid_data, valid_labels
         else:
             m_data, labels, valid_data, valid_labels = get_padded_cifar10_data()
             if self.normalize:
@@ -41,7 +43,16 @@ class CifarDataLoader(object):
 
                 m_data = (m_data - self.mean) / self.stddev
 
-            return m_data, labels, valid_data, valid_labels
+        if self.partition:
+            if selection is None:
+                selection = self.selection
+            start = selection * len(m_data) // self.partition
+            end = (selection + 1) * len(m_data) // self.partition
+            if end > len(m_data):
+                raise IndexError('partition end is out of bounds')
+            m_data = m_data[start:end]
+
+        return m_data, labels, valid_data, valid_labels
 
     def get_test_data(self):
         m_data, labels = get_cifar10_test_data()
